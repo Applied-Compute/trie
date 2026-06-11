@@ -1,5 +1,4 @@
 import logging
-import sys
 
 import chz
 import structlog
@@ -23,10 +22,7 @@ class RunArgs:
     )
     duration_update_interval: float | None = chz.field(
         default=None,
-        doc=(
-            "Optional interval in seconds for logging remaining benchmark duration. "
-            "Can be passed as duration-update-interval."
-        ),
+        doc="Optional interval in seconds for logging remaining benchmark duration.",
     )
     seed: int | None = chz.field(
         default=None,
@@ -72,19 +68,8 @@ class RunArgs:
             raise ValueError("num_gpus must be at least 1")
 
 
-def _normalize_argv(argv: list[str]) -> list[str]:
-    normalized = []
-    for arg in argv:
-        key, sep, value = arg.partition("=")
-        if sep and key.lstrip("-") == "duration-update-interval":
-            normalized.append(f"duration_update_interval={value}")
-        else:
-            normalized.append(arg)
-    return normalized
-
-
 def main() -> None:
-    args: RunArgs = chz.entrypoint(RunArgs, argv=_normalize_argv(sys.argv[1:]))
+    args: RunArgs = chz.entrypoint(RunArgs)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     structlog.configure(
