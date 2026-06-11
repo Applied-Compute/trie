@@ -20,6 +20,10 @@ class RunArgs:
         default=300.0,
         doc="Duration in seconds to run the benchmark.",
     )
+    duration_update_interval: float | None = chz.field(
+        default=None,
+        doc="Optional interval in seconds for logging remaining benchmark duration.",
+    )
     seed: int | None = chz.field(
         default=None,
         doc="Optional random seed for reproducible workload resolution and prompt generation.",
@@ -51,6 +55,11 @@ class RunArgs:
             raise ValueError("concurrency must be greater than 0")
         if self.duration <= 0:
             raise ValueError("duration must be greater than 0")
+        if (
+            self.duration_update_interval is not None
+            and self.duration_update_interval <= 0
+        ):
+            raise ValueError("duration_update_interval must be greater than 0")
         if self.max_retries < 0:
             raise ValueError("max_retries must be greater than or equal to 0")
         if self.timeout <= 0:
@@ -83,6 +92,7 @@ def main() -> None:
         args.workload_path,
         concurrency=args.concurrency,
         duration=args.duration,
+        duration_update_interval=args.duration_update_interval,
         num_gpus=args.num_gpus,
         stream=args.stream,
     )

@@ -198,17 +198,25 @@ class Client:
         workload: list[Workload] | str,
         concurrency: int,
         duration: float,
+        duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
     ) -> BenchmarkResult:
         workload_list = load_workloads(workload)
+        if duration_update_interval is not None and duration_update_interval <= 0:
+            raise ValueError("duration_update_interval must be greater than 0")
+        benchmark_log_fields = {
+            "model": self._model,
+            "workload_templates": len(workload_list),
+            "concurrency": concurrency,
+            "duration": duration,
+            "num_gpus": num_gpus,
+        }
+        if duration_update_interval is not None:
+            benchmark_log_fields["duration_update_interval"] = duration_update_interval
         logger.info(
             "starting benchmark",
-            model=self._model,
-            workload_templates=len(workload_list),
-            concurrency=concurrency,
-            duration=duration,
-            num_gpus=num_gpus,
+            **benchmark_log_fields,
         )
         result = BenchmarkResult()
         benchmark_start = time.perf_counter()
@@ -221,6 +229,7 @@ class Client:
             auto_refresh=False,
             transient=True,
         ) as live:
+            next_duration_update = duration_update_interval
 
             def refresh() -> None:
                 live.update(
@@ -232,16 +241,41 @@ class Client:
                     refresh=True,
                 )
 
+            def log_duration_update() -> None:
+                nonlocal next_duration_update
+                if next_duration_update is None:
+                    return
+                elapsed = time.perf_counter() - benchmark_start
+                if elapsed < next_duration_update:
+                    return
+                logger.info(
+                    "benchmark in progress",
+                    remaining_duration=round(max(duration - elapsed, 0.0), 1),
+                )
+                next_duration_update = elapsed + duration_update_interval
+
             active: set[asyncio.Task[None]] = set()
             for item in cycle(workload_list):
                 if time.perf_counter() - benchmark_start >= duration:
                     break
+                log_duration_update()
                 if len(active) == concurrency:
+                    timeout = None
+                    if next_duration_update is not None:
+                        elapsed = time.perf_counter() - benchmark_start
+                        timeout = max(
+                            min(next_duration_update - elapsed, duration - elapsed),
+                            0.0,
+                        )
                     done, active = await asyncio.wait(
-                        active, return_when=asyncio.FIRST_COMPLETED
+                        active,
+                        timeout=timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
                         task.result()
+                    if not done:
+                        continue
                 active.add(
                     asyncio.create_task(
                         self._run_workload(
@@ -265,6 +299,7 @@ class Client:
         workload: list[Workload] | str,
         concurrency: int,
         duration: float,
+        duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
     ) -> BenchmarkResult:
@@ -274,6 +309,7 @@ class Client:
                     workload,
                     concurrency,
                     duration,
+                    duration_update_interval=duration_update_interval,
                     num_gpus=num_gpus,
                     stream=stream,
                 )
