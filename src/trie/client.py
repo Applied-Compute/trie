@@ -196,22 +196,32 @@ class Client:
     async def run(
         self,
         workload: list[Workload] | str,
-        concurrency: int,
-        duration: float,
+        concurrency: int | None = None,
+        duration: float = 300.0,
+        arrival_rate: float | None = None,
         duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
     ) -> BenchmarkResult:
         workload_list = load_workloads(workload)
+        if (concurrency is None) == (arrival_rate is None):
+            raise ValueError("specify exactly one of concurrency or arrival_rate")
+        if concurrency is not None and concurrency <= 0:
+            raise ValueError("concurrency must be greater than 0")
+        if arrival_rate is not None and arrival_rate <= 0:
+            raise ValueError("arrival_rate must be greater than 0")
         if duration_update_interval is not None and duration_update_interval <= 0:
             raise ValueError("duration_update_interval must be greater than 0")
         benchmark_log_fields = {
             "model": self._model,
             "workload_templates": len(workload_list),
-            "concurrency": concurrency,
             "duration": duration,
             "num_gpus": num_gpus,
         }
+        if concurrency is not None:
+            benchmark_log_fields["concurrency"] = concurrency
+        if arrival_rate is not None:
+            benchmark_log_fields["arrival_rate"] = arrival_rate
         if duration_update_interval is not None:
             benchmark_log_fields["duration_update_interval"] = duration_update_interval
         logger.info(
@@ -255,11 +265,19 @@ class Client:
                 next_duration_update = elapsed + duration_update_interval
 
             active: set[asyncio.Task[None]] = set()
-            for item in cycle(workload_list):
-                if time.perf_counter() - benchmark_start >= duration:
-                    break
+            workload_iter = cycle(workload_list)
+            next_arrival = benchmark_start
+            arrival_interval = 1.0 / arrival_rate if arrival_rate is not None else None
+
+            while time.perf_counter() - benchmark_start < duration:
                 log_duration_update()
-                if len(active) == concurrency:
+                if arrival_interval is not None:
+                    done = {task for task in active if task.done()}
+                    active -= done
+                    for task in done:
+                        task.result()
+
+                if concurrency is not None and len(active) == concurrency:
                     timeout = None
                     if next_duration_update is not None:
                         elapsed = time.perf_counter() - benchmark_start
@@ -276,10 +294,32 @@ class Client:
                         task.result()
                     if not done:
                         continue
+
+                if arrival_interval is not None:
+                    wait_until = min(next_arrival, benchmark_start + duration)
+                    if next_duration_update is not None:
+                        wait_until = min(
+                            wait_until,
+                            benchmark_start + next_duration_update,
+                        )
+                    timeout = wait_until - time.perf_counter()
+                    if timeout > 0:
+                        if active:
+                            done, active = await asyncio.wait(
+                                active,
+                                timeout=timeout,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            for task in done:
+                                task.result()
+                        else:
+                            await asyncio.sleep(timeout)
+                        continue
+
                 active.add(
                     asyncio.create_task(
                         self._run_workload(
-                            item,
+                            next(workload_iter),
                             benchmark_start=benchmark_start,
                             result=result,
                             stream=stream,
@@ -287,6 +327,11 @@ class Client:
                         )
                     )
                 )
+                if arrival_interval is not None:
+                    next_arrival += arrival_interval
+                    now = time.perf_counter()
+                    if next_arrival < now:
+                        next_arrival = now + arrival_interval
             for task in active:
                 task.cancel()
             await asyncio.gather(*active, return_exceptions=True)
@@ -297,8 +342,9 @@ class Client:
     def sync_run(
         self,
         workload: list[Workload] | str,
-        concurrency: int,
-        duration: float,
+        concurrency: int | None = None,
+        duration: float = 300.0,
+        arrival_rate: float | None = None,
         duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
@@ -307,8 +353,9 @@ class Client:
             return asyncio.run(
                 self.run(
                     workload,
-                    concurrency,
-                    duration,
+                    concurrency=concurrency,
+                    duration=duration,
+                    arrival_rate=arrival_rate,
                     duration_update_interval=duration_update_interval,
                     num_gpus=num_gpus,
                     stream=stream,

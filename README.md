@@ -22,6 +22,9 @@ uv run trie \
 CLI arguments use the `RunArgs` field names directly, so multiword arguments
 should be passed with underscores such as `tokenizer_model=...`.
 
+Specify exactly one of `concurrency=N` or `arrival_rate=R`; `arrival_rate` is
+measured in trace starts per second.
+
 `model` is the name sent to the inference endpoint. `tokenizer_model` is
 loaded separately via `transformers.AutoTokenizer.from_pretrained(...)` to
 generate synthetic prompts with the requested token lengths. If `model` is
