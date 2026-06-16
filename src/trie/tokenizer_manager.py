@@ -28,6 +28,9 @@ class TokenizerManager:
     def _encode(self, text: str) -> list[int]:
         return self._tokenizer(text, add_special_tokens=False).input_ids
 
+    def count_tokens(self, text: str) -> int:
+        return len(self._encode(text))
+
     def _sample_token_ids(self, prompt_length: int) -> list[int]:
         return self._rng.integers(
             self._tokenizer.vocab_size, size=prompt_length

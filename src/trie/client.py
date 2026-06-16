@@ -70,16 +70,28 @@ class Client:
             extra_body={"ignore_eos": True},
         )
         text_parts: list[str] = []
+        last_token_at_s: float | None = None
+        inter_token_latencies_ms: list[float] = []
         ttft_s: float | None = None
         first_token_offset_s: float | None = None
         usage = None
         async for chunk in stream:
             if chunk.choices:
-                if ttft_s is None:
-                    first_token_at_s = time.perf_counter()
-                    ttft_s = first_token_at_s - request_start
-                    first_token_offset_s = first_token_at_s - trace_start
-                text_parts.append(chunk.choices[0].text or "")
+                text = chunk.choices[0].text or ""
+                if text:
+                    chunk_at_s = time.perf_counter()
+                    if ttft_s is None:
+                        ttft_s = chunk_at_s - request_start
+                        first_token_offset_s = chunk_at_s - trace_start
+                    text_parts.append(text)
+                    token_count = self._tokenizer_manager.count_tokens(text)
+                    if token_count > 0:
+                        if last_token_at_s is not None:
+                            gap_ms = (
+                                (chunk_at_s - last_token_at_s) * 1000.0 / token_count
+                            )
+                            inter_token_latencies_ms.extend([gap_ms] * token_count)
+                        last_token_at_s = chunk_at_s
             if chunk.usage is not None:
                 usage = chunk.usage
         latency_s = time.perf_counter() - request_start
@@ -92,6 +104,7 @@ class Client:
             latency_s,
             usage.completion_tokens if usage is not None else max_tokens,
             first_token_offset_s=first_token_offset_s,
+            inter_token_latencies_ms=inter_token_latencies_ms,
         )
         return "".join(text_parts)
 

@@ -121,6 +121,7 @@ A trace produces `num_turns + 1` completion requests: one per tool-use turn plus
 - `TTFT (s)` — (streaming) time to the first streamed token of the first request.
 - `TTFAT (s)` — (streaming) time from trace start to the first streamed token of the *final* request. The user-visible first token in an agent that hides intermediate tool turns.
 - `Decode TPS (tok/s)` — (streaming) mean post-TTFT decode throughput across the trace's requests.
+- `ITL (ms)` — (streaming) client-observed inter-token latency, reported across observed token intervals.
 - `Cache hit rate (%)` — server-reported `cached_prompt_tokens / prompt_tokens` over all requests in a trace.
 - `Eligible cache hit rate (%)` — same numerator, but the denominator is restricted to prompt tokens expected to be cacheable. This excludes the initial prompt and, on each turn, the tool output newly appended on that request.
   Formula: `sum_i cached_prompt_tokens_i / sum_i eligible_prompt_tokens_i`,
@@ -144,5 +145,5 @@ Prompt-token throughputs use the synthetic workload accounting; cache-hit metric
 ## Known limitations
 
 - Synthetic prompts are freshly random per trace, so cross-trace prefix sharing (e.g. a common system prompt or tool definition block) is not modeled and cache hit rates can be lower than in a deployment where such prefixes are shared.
-- `Decode TPS` assumes the first streamed chunk contains exactly one token. Backends that buffer multiple tokens into the first chunk will slightly overstate it.
+- `Decode TPS` and `ITL (ms)` are client-observed streaming metrics. If a backend buffers multiple tokens into one streamed chunk, `ITL (ms)` spreads the elapsed time since the prior chunk evenly across newly observed tokens in that chunk, and intervals inside the first streamed chunk are not observable.
 - The pinned `transformers==4.57.6` is required, at least for DeepSeek-R1, to match the tokenizer used by vLLM and SGLang as of April 2026. Other `transformers` versions can produce subtly different token counts and cause prompt-accounting drift.

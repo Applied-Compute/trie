@@ -188,6 +188,12 @@ def log_summary(result: BenchmarkResult, num_gpus: int | None = None) -> None:
             result.tps_values,
         ),
         (
+            "ITL (ms)",
+            "inter_token_latency_ms",
+            ".2f",
+            result.inter_token_latencies_ms,
+        ),
+        (
             "Cache hit rate (%)",
             "cache_hit_rate_pct",
             ".1f",
