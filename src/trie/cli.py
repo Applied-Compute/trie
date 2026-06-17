@@ -11,14 +11,8 @@ class RunArgs:
     workload_path: str = chz.field(doc="Path to the JSONL workload file.")
     endpoint: str = chz.field(doc="OpenAI-compatible endpoint base URL.")
     model: str = chz.field(doc="Model name to send to the completion API.")
-    concurrency: int | None = chz.field(
-        default=None,
-        doc="Maximum number of concurrent traces. Mutually exclusive with arrival_rate.",
-    )
-    arrival_rate: float | None = chz.field(
-        default=None,
-        doc="New trace arrivals per second. Mutually exclusive with concurrency.",
-    )
+    concurrency: int | None = chz.field(default=None, doc="Maximum concurrent traces.")
+    arrival_rate: float | None = chz.field(default=None, doc="Trace starts per second.")
     tokenizer_model: str | None = chz.field(
         default=None,
         doc="Optional model name override for loading tokenizer.",
