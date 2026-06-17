@@ -304,16 +304,7 @@ class Client:
                         )
                     timeout = wait_until - time.perf_counter()
                     if timeout > 0:
-                        if active:
-                            done, active = await asyncio.wait(
-                                active,
-                                timeout=timeout,
-                                return_when=asyncio.FIRST_COMPLETED,
-                            )
-                            for task in done:
-                                task.result()
-                        else:
-                            await asyncio.sleep(timeout)
+                        await asyncio.sleep(timeout)
                         continue
 
                 active.add(
@@ -329,9 +320,6 @@ class Client:
                 )
                 if arrival_interval is not None:
                     next_arrival += arrival_interval
-                    now = time.perf_counter()
-                    if next_arrival < now:
-                        next_arrival = now + arrival_interval
             for task in active:
                 task.cancel()
             await asyncio.gather(*active, return_exceptions=True)
@@ -353,8 +341,8 @@ class Client:
             return asyncio.run(
                 self.run(
                     workload,
-                    concurrency=concurrency,
-                    duration=duration,
+                    concurrency,
+                    duration,
                     arrival_rate=arrival_rate,
                     duration_update_interval=duration_update_interval,
                     num_gpus=num_gpus,
