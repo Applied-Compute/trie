@@ -115,6 +115,7 @@ class BenchmarkResult:
     ttfts: list[float] = field(default_factory=list)
     ttfats: list[float] = field(default_factory=list)
     tps_values: list[float] = field(default_factory=list)
+    inter_token_latencies_ms: list[float] = field(default_factory=list)
     points: list[CompletionPoint] = field(default_factory=list)
     server_metrics: list[ServerMetrics] = field(default_factory=list)
 
@@ -213,6 +214,7 @@ class StreamAccumulator:
     _first_ttft: float | None = field(default=None, init=False)
     _last_first_token_offset_s: float | None = field(default=None, init=False)
     _sum_turn_tps: float = field(default=0.0, init=False)
+    _inter_token_latencies_ms: list[float] = field(default_factory=list, init=False)
     _request_count: int = field(default=0, init=False)
 
     def record_turn_stream_metrics(
@@ -222,12 +224,15 @@ class StreamAccumulator:
         completion_tokens: int,
         *,
         first_token_offset_s: float | None = None,
+        inter_token_latencies_ms: list[float] | None = None,
     ) -> None:
         if self._first_ttft is None:
             self._first_ttft = ttft
         self._last_first_token_offset_s = (
             ttft if first_token_offset_s is None else first_token_offset_s
         )
+        if inter_token_latencies_ms:
+            self._inter_token_latencies_ms.extend(inter_token_latencies_ms)
         decode_time_s = max(latency - ttft, 0.0)
         self._sum_turn_tps += (
             (completion_tokens - 1) / decode_time_s
@@ -244,3 +249,4 @@ class StreamAccumulator:
         result.ttfts.append(self._first_ttft)
         result.ttfats.append(self._last_first_token_offset_s)
         result.tps_values.append(self._sum_turn_tps / self._request_count)
+        result.inter_token_latencies_ms.extend(self._inter_token_latencies_ms)
