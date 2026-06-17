@@ -182,10 +182,10 @@ def log_summary(result: BenchmarkResult, num_gpus: int | None = None) -> None:
         ("TTFT (s)", "ttft_s", ".3f", result.ttfts),
         ("TTFAT (s)", "ttfat_s", ".3f", result.ttfats),
         (
-            "Decode TPS (tok/s)",
-            "mean_turn_decode_tps_tok_s",
+            "Decode TPOT (ms/tok)",
+            "mean_turn_decode_tpot_ms",
             ".2f",
-            result.tps_values,
+            [1000.0 / value for value in result.tps_values if value > 0],
         ),
         (
             "ITL (ms)",
