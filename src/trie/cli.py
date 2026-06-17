@@ -11,7 +11,14 @@ class RunArgs:
     workload_path: str = chz.field(doc="Path to the JSONL workload file.")
     endpoint: str = chz.field(doc="OpenAI-compatible endpoint base URL.")
     model: str = chz.field(doc="Model name to send to the completion API.")
-    concurrency: int = chz.field(doc="Maximum number of concurrent requests.")
+    concurrency: int | None = chz.field(
+        default=None,
+        doc="Maximum number of concurrent traces. Mutually exclusive with arrival_rate.",
+    )
+    arrival_rate: float | None = chz.field(
+        default=None,
+        doc="New trace arrivals per second. Mutually exclusive with concurrency.",
+    )
     tokenizer_model: str | None = chz.field(
         default=None,
         doc="Optional model name override for loading tokenizer.",
@@ -51,8 +58,6 @@ class RunArgs:
 
     @chz.validate
     def _validate_fields(self) -> None:
-        if self.concurrency <= 0:
-            raise ValueError("concurrency must be greater than 0")
         if self.duration <= 0:
             raise ValueError("duration must be greater than 0")
         if (
@@ -91,6 +96,7 @@ def main() -> None:
     ).sync_run(
         args.workload_path,
         concurrency=args.concurrency,
+        arrival_rate=args.arrival_rate,
         duration=args.duration,
         duration_update_interval=args.duration_update_interval,
         num_gpus=args.num_gpus,
