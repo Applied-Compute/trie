@@ -194,6 +194,18 @@ def log_summary(result: BenchmarkResult, num_gpus: int | None = None) -> None:
             result.inter_token_latencies_ms,
         ),
         (
+            "Output tokens/turn",
+            "output_tokens_per_turn",
+            ".1f",
+            result.request_output_tokens,
+        ),
+        (
+            "Output tokens/trace",
+            "output_tokens_per_trace",
+            ".1f",
+            result.trace_output_tokens,
+        ),
+        (
             "Cache hit rate (%)",
             "cache_hit_rate_pct",
             ".1f",

@@ -49,6 +49,10 @@ class RunArgs:
         default=False,
         doc="Use streaming completions and report TTFT, TTFAT, and TPS per trace.",
     )
+    output_metrics_path: str | None = chz.field(
+        default=None,
+        doc="Optional JSONL output path for per-trace output-token records.",
+    )
 
     @chz.validate
     def _validate_fields(self) -> None:
@@ -95,6 +99,7 @@ def main() -> None:
         duration_update_interval=args.duration_update_interval,
         num_gpus=args.num_gpus,
         stream=args.stream,
+        output_metrics_path=args.output_metrics_path,
     )
 
 

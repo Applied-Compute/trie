@@ -1,7 +1,9 @@
-from openai.types.completion_usage import CompletionUsage
-
 from bisect import bisect_left
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from openai.types.completion_usage import CompletionUsage
 
 from trie.types import Workload
 
@@ -29,6 +31,18 @@ class ThroughputRates:
     cached_tok_s: float
     new_prompt_tok_s: float
     completion_tok_s: float
+
+
+@dataclass(frozen=True)
+class TraceOutputTokenRecord:
+    """Server-reported output token counts for one completed trace."""
+
+    request_id: str
+    output_tokens_per_turn: list[int]
+
+    @property
+    def output_tokens_per_trace(self) -> int:
+        return sum(self.output_tokens_per_turn)
 
 
 def _find_points_from(
@@ -116,6 +130,9 @@ class BenchmarkResult:
     ttfats: list[float] = field(default_factory=list)
     tps_values: list[float] = field(default_factory=list)
     inter_token_latencies_ms: list[float] = field(default_factory=list)
+    request_output_tokens: list[int] = field(default_factory=list)
+    trace_output_tokens: list[int] = field(default_factory=list)
+    trace_output_token_records: list[TraceOutputTokenRecord] = field(default_factory=list)
     points: list[CompletionPoint] = field(default_factory=list)
     server_metrics: list[ServerMetrics] = field(default_factory=list)
 
@@ -163,6 +180,8 @@ class BenchmarkResult:
         workload: Workload,
         latency: float,
         timestamp: float,
+        request_id: str | None = None,
+        output_tokens_per_turn: list[int] | None = None,
     ) -> None:
         new_prompt_tokens = (
             workload.turns[-1].tool_call_output_length
@@ -177,10 +196,39 @@ class BenchmarkResult:
             - new_prompt_tokens,
         )
         self.latencies.append(latency)
+        if output_tokens_per_turn is not None:
+            output_tokens_per_turn = list(output_tokens_per_turn)
+            self.request_output_tokens.extend(output_tokens_per_turn)
+            self.trace_output_tokens.append(sum(output_tokens_per_turn))
+            self.trace_output_token_records.append(
+                TraceOutputTokenRecord(
+                    request_id=request_id or str(len(self.trace_output_token_records)),
+                    output_tokens_per_turn=output_tokens_per_turn,
+                )
+            )
         self.completed_requests += 1
 
     def record_failure(self) -> None:
         self.failed_requests += 1
+
+    def write_output_token_records(self, path: str | Path) -> None:
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            for record in self.trace_output_token_records:
+                f.write(
+                    json.dumps(
+                        {
+                            "request_id": record.request_id,
+                            "output_tokens_per_turn": record.output_tokens_per_turn,
+                            "output_tokens_per_trace": record.output_tokens_per_trace,
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+        tmp.replace(dest)
 
     @property
     def completed_prompt_tokens(self) -> int:

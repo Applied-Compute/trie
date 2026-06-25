@@ -2,10 +2,11 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from itertools import cycle
 
 import structlog
-from openai import AsyncOpenAI, OpenAIError
+from openai import AsyncOpenAI
 from rich.live import Live
 
 from trie.reporting import build_progress_lines, console, log_summary
@@ -18,6 +19,12 @@ from trie.tokenizer_manager import TokenizerManager
 from trie.types import Workload
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class RequestResult:
+    text: str
+    output_tokens: int
 
 
 def load_workloads(workload: list[Workload] | str) -> list[Workload]:
@@ -50,16 +57,18 @@ class Client:
         self._tokenizer_manager = TokenizerManager(tokenizer_model or model, seed=seed)
         self._result: BenchmarkResult | None = None
         self._benchmark_start: float | None = None
+        self._stopping_run = False
 
     async def _execute_stream_request(
         self,
         prompt: str,
         max_tokens: int,
         *,
+        request_id: str,
         trace_start: float,
         metrics: ServerMetrics,
         stream_acc: StreamAccumulator,
-    ) -> str:
+    ) -> RequestResult:
         request_start = time.perf_counter()
         stream = await self._client.completions.create(
             model=self._model,
@@ -68,6 +77,7 @@ class Client:
             stream=True,
             stream_options={"include_usage": True},
             extra_body={"ignore_eos": True},
+            extra_headers={"X-SMG-Routing-Key": request_id},
         )
         text_parts: list[str] = []
         last_token_at_s: float | None = None
@@ -99,29 +109,32 @@ class Client:
             raise ValueError("stream produced no chunks with choices")
         if usage is not None:
             metrics.record_usage(usage)
+        output_tokens = usage.completion_tokens if usage is not None else max_tokens
         stream_acc.record_turn_stream_metrics(
             ttft_s,
             latency_s,
-            usage.completion_tokens if usage is not None else max_tokens,
+            output_tokens,
             first_token_offset_s=first_token_offset_s,
             inter_token_latencies_ms=inter_token_latencies_ms,
         )
-        return "".join(text_parts)
+        return RequestResult("".join(text_parts), output_tokens)
 
     async def _execute_request(
         self,
         prompt: str,
         max_tokens: int,
         *,
+        request_id: str,
         stream: bool,
         trace_start: float,
         metrics: ServerMetrics,
         stream_acc: StreamAccumulator,
-    ) -> str:
+    ) -> RequestResult:
         if stream:
             return await self._execute_stream_request(
                 prompt,
                 max_tokens,
+                request_id=request_id,
                 trace_start=trace_start,
                 metrics=metrics,
                 stream_acc=stream_acc,
@@ -132,11 +145,15 @@ class Client:
             prompt=prompt,
             max_tokens=max_tokens,
             extra_body={"ignore_eos": True},
+            extra_headers={"X-SMG-Routing-Key": request_id},
         )
         if response.usage is None:
             raise ValueError("response.usage must not be None")
         metrics.record_usage(response.usage)
-        return response.choices[0].text or ""
+        return RequestResult(
+            response.choices[0].text or "",
+            response.usage.completion_tokens,
+        )
 
     async def _run_workload(
         self,
@@ -144,6 +161,7 @@ class Client:
         *,
         benchmark_start: float,
         result: BenchmarkResult,
+        request_id: str,
         stream: bool,
         refresh: Callable[[], None],
     ) -> None:
@@ -151,6 +169,7 @@ class Client:
         turns_completed = 0
         metrics = ServerMetrics()
         stream_acc = StreamAccumulator()
+        output_tokens_per_turn: list[int] = []
         try:
             # Generate one fewer token than requested to compensate for BOS token
             # which is added by vLLM, SGLang, and TensorRT-LLM.
@@ -158,14 +177,16 @@ class Client:
                 max(workload.input_prompt_length - 1, 0)
             )
             for turn_index, turn in enumerate(workload.turns):
-                response_text = await self._execute_request(
+                response = await self._execute_request(
                     prompt,
                     turn.assistant_response_length,
+                    request_id=request_id,
                     stream=stream,
                     trace_start=request_start,
                     metrics=metrics,
                     stream_acc=stream_acc,
                 )
+                output_tokens_per_turn.append(response.output_tokens)
                 result.record_turn(
                     workload,
                     turn_index,
@@ -173,20 +194,22 @@ class Client:
                 )
                 turns_completed = turn_index + 1
                 refresh()
-                prompt += response_text
+                prompt += response.text
                 await asyncio.sleep(turn.tool_call_latency)
                 prompt += self._tokenizer_manager.get_prompt(
                     turn.tool_call_output_length
                 )
 
-            await self._execute_request(
+            response = await self._execute_request(
                 prompt,
                 workload.final_assistant_response_length,
+                request_id=request_id,
                 stream=stream,
                 trace_start=request_start,
                 metrics=metrics,
                 stream_acc=stream_acc,
             )
+            output_tokens_per_turn.append(response.output_tokens)
             if not stream or metrics.prompt_tokens > 0:
                 result.server_metrics.append(metrics)
             else:
@@ -196,14 +219,23 @@ class Client:
                 workload,
                 latency=event_timestamp - request_start,
                 timestamp=event_timestamp - benchmark_start,
+                request_id=request_id,
+                output_tokens_per_turn=output_tokens_per_turn,
             )
             if stream:
                 stream_acc.commit(result)
         except asyncio.CancelledError:
             return
-        except OpenAIError as e:
+        except Exception as e:
+            if self._stopping_run:
+                return
             result.record_failure()
-            logger.warning("request failed", error=str(e), turn=turns_completed)
+            logger.warning(
+                "request failed",
+                error=str(e),
+                request_id=request_id,
+                turn=turns_completed,
+            )
         refresh()
 
     async def run(
@@ -215,6 +247,7 @@ class Client:
         duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
+        output_metrics_path: str | None = None,
     ) -> BenchmarkResult:
         workload_list = load_workloads(workload)
         if (concurrency is None) == (arrival_rate is None):
@@ -281,6 +314,7 @@ class Client:
             workload_iter = cycle(workload_list)
             next_arrival = benchmark_start
             arrival_interval = 1.0 / arrival_rate if arrival_rate is not None else None
+            next_trace_id = 0
 
             while time.perf_counter() - benchmark_start < duration:
                 log_duration_update()
@@ -320,12 +354,15 @@ class Client:
                         await asyncio.sleep(timeout)
                         continue
 
+                request_id = str(next_trace_id)
+                next_trace_id += 1
                 active.add(
                     asyncio.create_task(
                         self._run_workload(
                             next(workload_iter),
                             benchmark_start=benchmark_start,
                             result=result,
+                            request_id=request_id,
                             stream=stream,
                             refresh=refresh,
                         )
@@ -335,9 +372,27 @@ class Client:
                     next_arrival += arrival_interval
             for task in active:
                 task.cancel()
-            await asyncio.gather(*active, return_exceptions=True)
+            if active:
+                self._stopping_run = True
+                try:
+                    await self._client.close()
+                except Exception as e:
+                    logger.warning("failed to close OpenAI client", error=str(e))
+                _, pending = await asyncio.wait(active, timeout=30.0)
+                if pending:
+                    logger.warning(
+                        "timed out waiting for cancelled traces",
+                        pending_traces=len(pending),
+                    )
         result.wall_time = time.perf_counter() - benchmark_start
         log_summary(result, num_gpus=num_gpus)
+        if output_metrics_path is not None:
+            result.write_output_token_records(output_metrics_path)
+            logger.info(
+                "wrote output token metrics",
+                output_metrics_path=output_metrics_path,
+                traces=len(result.trace_output_token_records),
+            )
         return result
 
     def sync_run(
@@ -349,6 +404,7 @@ class Client:
         duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
+        output_metrics_path: str | None = None,
     ) -> BenchmarkResult:
         try:
             return asyncio.run(
@@ -360,6 +416,7 @@ class Client:
                     duration_update_interval=duration_update_interval,
                     num_gpus=num_gpus,
                     stream=stream,
+                    output_metrics_path=output_metrics_path,
                 )
             )
         except KeyboardInterrupt:
@@ -368,7 +425,15 @@ class Client:
             result = self._result
             result.wall_time = time.perf_counter() - self._benchmark_start
             log_summary(result, num_gpus=num_gpus)
+            if output_metrics_path is not None:
+                result.write_output_token_records(output_metrics_path)
+                logger.info(
+                    "wrote output token metrics",
+                    output_metrics_path=output_metrics_path,
+                    traces=len(result.trace_output_token_records),
+                )
             return result
         finally:
+            self._stopping_run = False
             self._result = None
             self._benchmark_start = None

@@ -21,6 +21,10 @@ uv run trie \
 
 CLI arguments use the `RunArgs` field names directly, so multiword arguments
 should be passed with underscores such as `tokenizer_model=...`.
+`output_metrics_path=...` can be used to write one JSONL row per completed
+trace with its request id, per-turn output-token counts, and total output
+tokens for the trace. Trie also sends the same trace request id on every
+turn-level HTTP request as the `X-SMG-Routing-Key` header.
 
 `model` is the name sent to the inference endpoint. `tokenizer_model` is
 loaded separately via `transformers.AutoTokenizer.from_pretrained(...)` to
@@ -122,6 +126,8 @@ A trace produces `num_turns + 1` completion requests: one per tool-use turn plus
 - `TTFAT (s)` — (streaming) time from trace start to the first streamed token of the *final* request. The user-visible first token in an agent that hides intermediate tool turns.
 - `Decode TPOT (ms/tok)` — (streaming) inverse of mean post-TTFT decode throughput across the trace's requests. Higher percentile rows are the slow tail, so p95/p99 represent worse decode cases.
 - `ITL (ms)` — (streaming) client-observed inter-token latency, reported across observed token intervals.
+- `Output tokens/turn` — server-reported completion tokens for each assistant turn in completed traces, including tool-use turns and final responses.
+- `Output tokens/trace` — sum of server-reported completion tokens across all requests in a completed trace.
 - `Cache hit rate (%)` — server-reported `cached_prompt_tokens / prompt_tokens` over all requests in a trace.
 - `Eligible cache hit rate (%)` — same numerator, but the denominator is restricted to prompt tokens expected to be cacheable. This excludes the initial prompt and, on each turn, the tool output newly appended on that request.
   Formula: `sum_i cached_prompt_tokens_i / sum_i eligible_prompt_tokens_i`,
