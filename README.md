@@ -16,11 +16,15 @@ uv run trie \
   concurrency=8 \
   duration=300 \
   stream=True \
+  logprobs=5 \
   num_gpus=8
 ```
 
 CLI arguments use the `RunArgs` field names directly, so multiword arguments
 should be passed with underscores such as `tokenizer_model=...`.
+`logprobs=N` requests top-token logprobs from the OpenAI-compatible
+`/v1/completions` endpoint for the output tokens of every turn-level completion
+request. Prompt tokens are not echoed or included in the returned logprobs.
 `output_metrics_path=...` can be used to write one JSONL row per completed
 trace with its request id, per-turn output-token counts, and total output
 tokens for the trace. Trie also sends the same trace request id on every

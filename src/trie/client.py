@@ -68,17 +68,21 @@ class Client:
         trace_start: float,
         metrics: ServerMetrics,
         stream_acc: StreamAccumulator,
+        logprobs: int | None,
     ) -> RequestResult:
         request_start = time.perf_counter()
-        stream = await self._client.completions.create(
-            model=self._model,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            stream=True,
-            stream_options={"include_usage": True},
-            extra_body={"ignore_eos": True},
-            extra_headers={"X-SMG-Routing-Key": request_id},
-        )
+        request_kwargs = {
+            "model": self._model,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "extra_body": {"ignore_eos": True},
+            "extra_headers": {"X-SMG-Routing-Key": request_id},
+        }
+        if logprobs is not None:
+            request_kwargs["logprobs"] = logprobs
+        stream = await self._client.completions.create(**request_kwargs)
         text_parts: list[str] = []
         last_token_at_s: float | None = None
         inter_token_latencies_ms: list[float] = []
@@ -129,6 +133,7 @@ class Client:
         trace_start: float,
         metrics: ServerMetrics,
         stream_acc: StreamAccumulator,
+        logprobs: int | None,
     ) -> RequestResult:
         if stream:
             return await self._execute_stream_request(
@@ -138,15 +143,19 @@ class Client:
                 trace_start=trace_start,
                 metrics=metrics,
                 stream_acc=stream_acc,
+                logprobs=logprobs,
             )
 
-        response = await self._client.completions.create(
-            model=self._model,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            extra_body={"ignore_eos": True},
-            extra_headers={"X-SMG-Routing-Key": request_id},
-        )
+        request_kwargs = {
+            "model": self._model,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "extra_body": {"ignore_eos": True},
+            "extra_headers": {"X-SMG-Routing-Key": request_id},
+        }
+        if logprobs is not None:
+            request_kwargs["logprobs"] = logprobs
+        response = await self._client.completions.create(**request_kwargs)
         if response.usage is None:
             raise ValueError("response.usage must not be None")
         metrics.record_usage(response.usage)
@@ -163,6 +172,7 @@ class Client:
         result: BenchmarkResult,
         request_id: str,
         stream: bool,
+        logprobs: int | None,
         refresh: Callable[[], None],
     ) -> None:
         request_start = time.perf_counter()
@@ -185,6 +195,7 @@ class Client:
                     trace_start=request_start,
                     metrics=metrics,
                     stream_acc=stream_acc,
+                    logprobs=logprobs,
                 )
                 output_tokens_per_turn.append(response.output_tokens)
                 result.record_turn(
@@ -208,6 +219,7 @@ class Client:
                 trace_start=request_start,
                 metrics=metrics,
                 stream_acc=stream_acc,
+                logprobs=logprobs,
             )
             output_tokens_per_turn.append(response.output_tokens)
             if not stream or metrics.prompt_tokens > 0:
@@ -247,6 +259,7 @@ class Client:
         duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
+        logprobs: int | None = None,
         output_metrics_path: str | None = None,
     ) -> BenchmarkResult:
         workload_list = load_workloads(workload)
@@ -270,6 +283,8 @@ class Client:
             benchmark_log_fields["arrival_rate"] = arrival_rate
         if duration_update_interval is not None:
             benchmark_log_fields["duration_update_interval"] = duration_update_interval
+        if logprobs is not None:
+            benchmark_log_fields["logprobs"] = logprobs
         logger.info(
             "starting benchmark",
             **benchmark_log_fields,
@@ -364,6 +379,7 @@ class Client:
                             result=result,
                             request_id=request_id,
                             stream=stream,
+                            logprobs=logprobs,
                             refresh=refresh,
                         )
                     )
@@ -404,6 +420,7 @@ class Client:
         duration_update_interval: float | None = None,
         num_gpus: int | None = None,
         stream: bool = False,
+        logprobs: int | None = None,
         output_metrics_path: str | None = None,
     ) -> BenchmarkResult:
         try:
@@ -416,6 +433,7 @@ class Client:
                     duration_update_interval=duration_update_interval,
                     num_gpus=num_gpus,
                     stream=stream,
+                    logprobs=logprobs,
                     output_metrics_path=output_metrics_path,
                 )
             )

@@ -49,6 +49,13 @@ class RunArgs:
         default=False,
         doc="Use streaming completions and report TTFT, TTFAT, and TPS per trace.",
     )
+    logprobs: int | None = chz.field(
+        default=None,
+        doc=(
+            "Optional number of top output-token logprobs to request from the "
+            "completions endpoint."
+        ),
+    )
     output_metrics_path: str | None = chz.field(
         default=None,
         doc="Optional JSONL output path for per-trace output-token records.",
@@ -69,6 +76,8 @@ class RunArgs:
             raise ValueError("timeout must be greater than 0")
         if self.num_gpus is not None and self.num_gpus < 1:
             raise ValueError("num_gpus must be at least 1")
+        if self.logprobs is not None and self.logprobs < 0:
+            raise ValueError("logprobs must be greater than or equal to 0")
 
 
 def main() -> None:
@@ -99,6 +108,7 @@ def main() -> None:
         duration_update_interval=args.duration_update_interval,
         num_gpus=args.num_gpus,
         stream=args.stream,
+        logprobs=args.logprobs,
         output_metrics_path=args.output_metrics_path,
     )
 
