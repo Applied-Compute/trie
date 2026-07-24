@@ -146,4 +146,4 @@ Prompt-token throughputs use the synthetic workload accounting; cache-hit metric
 
 - Synthetic prompts are freshly random per trace, so cross-trace prefix sharing (e.g. a common system prompt or tool definition block) is not modeled and cache hit rates can be lower than in a deployment where such prefixes are shared.
 - `Decode TPOT (ms/tok)` and `ITL (ms)` are client-observed streaming metrics. If a backend buffers multiple tokens into one streamed chunk, `ITL (ms)` spreads the elapsed time since the prior chunk evenly across newly observed tokens in that chunk, and intervals inside the first streamed chunk are not observable.
-- The pinned `transformers==4.57.6` is required, at least for DeepSeek-R1, to match the tokenizer used by vLLM and SGLang as of April 2026. Other `transformers` versions can produce subtly different token counts and cause prompt-accounting drift.
+- **2026-07-23:** We bumped to `transformers==5.6.0` to match the SGLang environment we currently use. DeepSeek-R1 may still need `transformers==4.57.6`; supporting it with the current SGLang environment may require a model-specific compatibility workaround to preserve correct token counts.
