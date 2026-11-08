@@ -77,7 +77,15 @@ class ServerMetrics:
     prompt_tokens: int = 0
     cached_tokens: int = 0
     eligible_prompt_tokens: int = 0
+    # Prompt tokens of the trace's first request that are expected to be cached:
+    # a shared prefix that an earlier trace has already sent to the server.
+    first_request_eligible_prompt_tokens: int = 0
     _next_request_eligible_prompt_tokens: int = field(default=0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._next_request_eligible_prompt_tokens = (
+            self.first_request_eligible_prompt_tokens
+        )
 
     def record_usage(self, usage: CompletionUsage) -> None:
         self.prompt_tokens += usage.prompt_tokens
@@ -144,9 +152,13 @@ class BenchmarkResult:
         workload: Workload,
         turn_index: int,
         timestamp: float,
+        warm_prefix_tokens: int = 0,
     ) -> None:
+        """Record a completed tool-use turn. ``warm_prefix_tokens`` is the part
+        of the initial prompt expected to be cached on the first request (a
+        shared prefix already sent by another trace); it only affects turn 0."""
         new_prompt_tokens = (
-            workload.input_prompt_length
+            workload.input_prompt_length - warm_prefix_tokens
             if turn_index == 0
             else workload.turns[turn_index - 1].tool_call_output_length
         )
@@ -163,11 +175,12 @@ class BenchmarkResult:
         workload: Workload,
         latency: float,
         timestamp: float,
+        warm_prefix_tokens: int = 0,
     ) -> None:
         new_prompt_tokens = (
             workload.turns[-1].tool_call_output_length
             if workload.turns
-            else workload.input_prompt_length
+            else workload.input_prompt_length - warm_prefix_tokens
         )
         self._append_point(
             timestamp=timestamp,

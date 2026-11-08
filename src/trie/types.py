@@ -22,6 +22,17 @@ class Workload:
     input_prompt_length: int
     turns: list[Turn]
     final_assistant_response_length: int
+    # Leading tokens of the initial prompt that are identical across every
+    # trace with the same shared_prefix_id, e.g. a system prompt plus tool
+    # definitions. Counted inside input_prompt_length.
+    shared_prefix_length: int = 0
+    shared_prefix_id: str = "default"
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.shared_prefix_length <= self.input_prompt_length:
+            raise ValueError(
+                "shared_prefix_length must be between 0 and input_prompt_length"
+            )
 
     def cumulative_prompt_tokens(self, through_turn: int) -> int:
         return self.input_prompt_length + sum(
@@ -52,4 +63,6 @@ class Workload:
             input_prompt_length=d["input_prompt_length"],
             turns=turns,
             final_assistant_response_length=d["final_assistant_response_length"],
+            shared_prefix_length=d.get("shared_prefix_length", 0),
+            shared_prefix_id=str(d.get("shared_prefix_id", "default")),
         )

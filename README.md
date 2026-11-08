@@ -71,6 +71,8 @@ Each JSONL row defines one trace:
 - `tool_call_output_length` — per-turn tool result tokens (list of length `num_turns`)
 - `tool_call_latency` — per-turn simulated delay in seconds (list of length `num_turns`)
 - `final_assistant_response_length` — final assistant response token length after all tool-use turns
+- `shared_prefix_length` (optional, default 0) — leading tokens of the initial prompt that are identical across all traces with the same `shared_prefix_id`, modeling a common system prompt or tool-definition block. Counted inside `input_prompt_length`.
+- `shared_prefix_id` (optional, default `"default"`) — traces with the same id and `shared_prefix_length` share one synthesized prefix; use several ids to model several agents or tool sets hitting the same server.
 
 Example:
 
@@ -79,6 +81,14 @@ Example:
 ```
 
 A trace produces `num_turns + 1` completion requests: one per tool-use turn plus a final turn after the last tool result.
+
+With a shared prefix, the first request of each trace starts with the group's prefix and continues with fresh random tokens:
+
+```json
+{"num_turns": 2, "input_prompt_length": 6000, "shared_prefix_length": 4000, "shared_prefix_id": "coding-agent", "assistant_response_length": [16, 20], "tool_call_output_length": [8, 12], "tool_call_latency": [0.0, 0.0], "final_assistant_response_length": 64}
+```
+
+`scripts/generate_workload.py` writes these with `shared_prefix_length=... num_shared_prefixes=...`.
 
 ## Example output
 
@@ -126,11 +136,12 @@ A trace produces `num_turns + 1` completion requests: one per tool-use turn plus
 - `Eligible cache hit rate (%)` — same numerator, but the denominator is restricted to prompt tokens expected to be cacheable. This excludes the initial prompt and, on each turn, the tool output newly appended on that request.
   Formula: `sum_i cached_prompt_tokens_i / sum_i eligible_prompt_tokens_i`,
   where `eligible_prompt_tokens_0 = 0` and `eligible_prompt_tokens_i = prompt_tokens_{i-1} + completion_tokens_{i-1}` for `i > 0`.
+  With a shared prefix, `eligible_prompt_tokens_0 = shared_prefix_length` once a request carrying that prefix has completed in this run; traces that start before then count it as cold.
 
 ### Workload
 
 - `trace/s` — completed traces per wall-clock second.
-- `total prompt tok/s`, `cached prompt tok/s`, `uncached prompt tok/s` — aggregate prompt-token throughput, split by what the synthetic workload accounting expects to be cached vs. new.
+- `total prompt tok/s`, `cached prompt tok/s`, `uncached prompt tok/s` — aggregate prompt-token throughput, split by what the synthetic workload accounting expects to be cached vs. new (a warm shared prefix counts as cached on a trace's first request).
 - `completion tok/s` — aggregate completion-token throughput.
 
 Each is reported under four columns:
@@ -144,6 +155,6 @@ Prompt-token throughputs use the synthetic workload accounting; cache-hit metric
 
 ## Known limitations
 
-- Synthetic prompts are freshly random per trace, so cross-trace prefix sharing (e.g. a common system prompt or tool definition block) is not modeled and cache hit rates can be lower than in a deployment where such prefixes are shared.
+- Apart from an optional `shared_prefix_length`, synthetic prompts are freshly random per trace. Workloads without it do not model cross-trace prefix sharing (e.g. a common system prompt or tool definition block), so cache hit rates can be lower than in a deployment where such prefixes are shared.
 - `Decode TPOT (ms/tok)` and `ITL (ms)` are client-observed streaming metrics. If a backend buffers multiple tokens into one streamed chunk, `ITL (ms)` spreads the elapsed time since the prior chunk evenly across newly observed tokens in that chunk, and intervals inside the first streamed chunk are not observable.
 - **2026-07-23:** We bumped to `transformers==5.6.0` to match the SGLang environment we currently use. DeepSeek-R1 may still need `transformers==4.57.6`; supporting it with the current SGLang environment may require a model-specific compatibility workaround to preserve correct token counts.
