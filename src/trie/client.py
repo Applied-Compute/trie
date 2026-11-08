@@ -48,6 +48,10 @@ class Client:
             timeout=timeout,
         )
         self._tokenizer_manager = TokenizerManager(tokenizer_model or model, seed=seed)
+        # Shared prefix text per (shared_prefix_id, shared_prefix_length), and
+        # the prefixes the server has already seen in a completed request.
+        self._shared_prefixes: dict[tuple[str, int], str] = {}
+        self._warm_prefixes: set[tuple[str, int]] = set()
         self._result: BenchmarkResult | None = None
         self._benchmark_start: float | None = None
 
@@ -138,6 +142,27 @@ class Client:
         metrics.record_usage(response.usage)
         return response.choices[0].text or ""
 
+    def _initial_prompt(self, workload: Workload) -> str:
+        """Build the trace's first prompt: the shared prefix for its
+        shared_prefix_id (synthesized once and reused verbatim by every trace
+        in the group), then fresh random tokens up to input_prompt_length."""
+        # Generate one fewer token than requested to compensate for BOS token
+        # which is added by vLLM, SGLang, and TensorRT-LLM.
+        if workload.shared_prefix_length == 0:
+            return self._tokenizer_manager.get_prompt(
+                max(workload.input_prompt_length - 1, 0)
+            )
+        key = (workload.shared_prefix_id, workload.shared_prefix_length)
+        prefix = self._shared_prefixes.get(key)
+        if prefix is None:
+            prefix = self._tokenizer_manager.get_prompt(
+                max(workload.shared_prefix_length - 1, 0)
+            )
+            self._shared_prefixes[key] = prefix
+        return prefix + self._tokenizer_manager.get_prompt(
+            workload.input_prompt_length - workload.shared_prefix_length
+        )
+
     async def _run_workload(
         self,
         workload: Workload,
@@ -149,14 +174,16 @@ class Client:
     ) -> None:
         request_start = time.perf_counter()
         turns_completed = 0
-        metrics = ServerMetrics()
+        # A shared prefix is only expected to hit the cache once a request that
+        # carried it has completed; traces racing the first one count it cold.
+        prefix_key = (workload.shared_prefix_id, workload.shared_prefix_length)
+        warm_prefix_tokens = (
+            workload.shared_prefix_length if prefix_key in self._warm_prefixes else 0
+        )
+        metrics = ServerMetrics(first_request_eligible_prompt_tokens=warm_prefix_tokens)
         stream_acc = StreamAccumulator()
         try:
-            # Generate one fewer token than requested to compensate for BOS token
-            # which is added by vLLM, SGLang, and TensorRT-LLM.
-            prompt = self._tokenizer_manager.get_prompt(
-                max(workload.input_prompt_length - 1, 0)
-            )
+            prompt = self._initial_prompt(workload)
             for turn_index, turn in enumerate(workload.turns):
                 response_text = await self._execute_request(
                     prompt,
@@ -170,7 +197,10 @@ class Client:
                     workload,
                     turn_index,
                     timestamp=time.perf_counter() - benchmark_start,
+                    warm_prefix_tokens=warm_prefix_tokens,
                 )
+                if workload.shared_prefix_length:
+                    self._warm_prefixes.add(prefix_key)
                 turns_completed = turn_index + 1
                 refresh()
                 prompt += response_text
@@ -187,6 +217,8 @@ class Client:
                 metrics=metrics,
                 stream_acc=stream_acc,
             )
+            if workload.shared_prefix_length:
+                self._warm_prefixes.add(prefix_key)
             if not stream or metrics.prompt_tokens > 0:
                 result.server_metrics.append(metrics)
             else:
@@ -196,6 +228,7 @@ class Client:
                 workload,
                 latency=event_timestamp - request_start,
                 timestamp=event_timestamp - benchmark_start,
+                warm_prefix_tokens=warm_prefix_tokens,
             )
             if stream:
                 stream_acc.commit(result)
@@ -242,6 +275,9 @@ class Client:
             **benchmark_log_fields,
         )
         result = BenchmarkResult()
+        # Each run starts cold: fresh shared prefixes, none known to be cached.
+        self._shared_prefixes.clear()
+        self._warm_prefixes.clear()
         benchmark_start = time.perf_counter()
         self._result = result
         self._benchmark_start = benchmark_start
